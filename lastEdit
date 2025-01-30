@@ -1,0 +1,149 @@
+import streamlit as st
+from transformers import pipeline
+import random
+
+@st.cache_resource
+def get_model():
+    return pipeline("text2text-generation", model="google/flan-t5-large")
+
+explanation_model = get_model()
+
+@st.cache_data
+def llm(prompt: str, **kwargs):
+    return explanation_model(prompt, **kwargs)
+
+
+st.session_state.setdefault("button_clicked", False)
+if "quiz_questions" not in st.session_state:
+    st.session_state.quiz_questions = []  
+if "quiz_answers" not in st.session_state:
+    st.session_state.quiz_answers = []  
+if "quiz_selected" not in st.session_state:
+    st.session_state.quiz_selected = {}  
+
+col1, col2 = st.columns([1, 5])
+with col1:
+    st.image("student.png", width=80)  
+with col2:
+    st.markdown("<h1 style='color: blue;'>Smart Study Buddy</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='color: gray;'>Your AI-Powered Learning Assistant</h3>", unsafe_allow_html=True)
+
+st.text(" ")
+st.text(" ")
+
+user_input = st.text_area("💡 Enter a topic, concept, or text to learn about:", height=200, placeholder="Type something here...")
+
+task = st.selectbox(
+    "🛠️ What do you want to do?",
+    ["Summarize Text", "Explain Concept", "Generate Questions","Provide Examples", "Interactive Quiz"]
+)
+
+def clean_summary(text: str):
+    """Clean up the generated summary to remove repeated or redundant phrases."""
+    sentences = text.split(". ")
+    unique_sentences = list(dict.fromkeys(sentences))  
+    return ". ".join(unique_sentences) + "." if unique_sentences else ""
+
+def summarize_text(input_text):
+    
+    max_chunk_size = 500
+    text_chunks = [input_text[i:i+max_chunk_size] for i in range(0, len(input_text), max_chunk_size)]  
+
+    summaries = []
+    for chunk in text_chunks:
+        prompt = f"Provide a concise, clear summary of the following text while avoiding redundancy or repetition. Focus only on the key points: {chunk}"
+        response = llm(prompt, max_length=200, min_length=50, num_return_sequences=1)
+        summaries.append(response[0]["generated_text"])
+
+    full_summary = " ".join(summaries)  
+    return clean_summary(full_summary)  
+
+def generate_questions(input_text):
+    prompt = f"Generate three diverse and insightful questions related to the following text. Please make sure to include one factual question, one analytical question, and one conceptual question. Each question should explore different aspects of the text: {input_text}"
+    
+    response = llm(prompt, max_length=150, num_return_sequences=3, do_sample=True)
+
+    questions = []
+    for res in response:
+        question = res["generated_text"].strip()
+        if question: 
+            questions.append(question)
+    
+    
+    unique_questions = list(set(questions)) 
+    return unique_questions[:3] 
+
+if st.button("🚀 Get Results") or st.session_state.button_clicked:
+    st.session_state.button_clicked = True
+    if user_input:
+        if task == "Summarize Text":
+            st.markdown("<h3 style='color: green;'>Summary:</h3>", unsafe_allow_html=True)
+            summary = summarize_text(user_input)  
+            st.write(summary)
+        
+        elif task == "Explain Concept":
+            prompt = f"Explain the following concept in simple terms: {user_input}"
+            response = llm(prompt, max_length=150, min_length=30, num_return_sequences=1)
+            st.markdown("<h3 style='color: green;'>Explanation:</h3>", unsafe_allow_html=True)
+            st.write(response[0]["generated_text"])
+        
+        elif task == "Generate Questions":
+            st.markdown("<h3 style='color: green;'>Generated Questions:</h3>", unsafe_allow_html=True)
+            questions = generate_questions(user_input)  
+            
+            for i, question in enumerate(questions):
+                st.markdown(f"<div style='border:1px solid #ddd; padding:10px; margin:10px; border-radius:5px;'>"
+                            f"<strong>Question {i+1}:</strong> {question}</div>", unsafe_allow_html=True)
+                
+        elif task == "Provide Examples":
+            st.markdown("<h3 style='color: green;'>Examples:</h3>", unsafe_allow_html=True)
+            prompt = f"Provide 3 detailed and practical tips for: {user_input}. Each tip should be clear, actionable, and specific to the topic."
+            for i in range(3):  # Generate 3 examples
+                response = explanation_model(prompt, max_length=200, num_return_sequences=1, do_sample=True, top_p=0.9, temperature=0.7)
+                st.write(f"{i+1}. {response[0]['generated_text']}")
+    
+        
+        elif task == "Interactive Quiz": # should use different LLM such as gemini or deepseek 
+            if not st.session_state.quiz_questions:
+                for i in range(1):  
+                    prompt =("Generate three multiple-choice questions based on the provided text. "
+                              "Make sure that the output follows the following format:\n"
+                              "The first line is the question, the following four lines are the choices. Followed by a single line for the answer and an empty line separating the questions.\n\n"
+                              "For Example:\n"
+                              "What is the capital of France?\n"
+                              "A) Paris\n"
+                              "B) London\n"
+                              "C) Berlin\n"
+                              "D) Madrid\n"
+                              "A\n\n"
+                              "Context:\n"
+                              f"{user_input}.")
+                    response = llm(prompt, max_length=1000, num_return_sequences=1, do_sample=True)
+                    question = response[0]["generated_text"]
+                    options = [
+                        "Option A: Correct Answer",
+                        "Option B: Incorrect Option 1",
+                        "Option C: Incorrect Option 2",
+                        "Option D: Incorrect Option 3"
+                    ]
+                    st.session_state.quiz_questions.append((question, options))
+                    st.session_state.quiz_answers.append("Option A: Correct Answer")
+            
+            st.markdown("<h3 style='color: green;'>Interactive Quiz:</h3>", unsafe_allow_html=True)
+            for i, (question, options) in enumerate(st.session_state.quiz_questions):
+                st.markdown(f"{i+1}. {question}")
+                selected_option = st.radio(f"Select your answer for Question {i+1}:", options, key=f"quiz_{i}", on_change=lambda: None)
+                st.session_state.quiz_selected[f"quiz_{i}"] = selected_option
+                if st.button(f"Check Answer for Question {i+1}", key=f"check_{i}"):
+                    if selected_option == st.session_state.quiz_answers[i]:
+                        st.success("✅ Correct!")
+                    else:
+                        st.error(f"❌ Incorrect! The correct answer is: {st.session_state.quiz_answers[i]}")
+    else:
+        st.warning("⚠️ Please enter a topic or text first!")
+
+st.sidebar.title("About Smart Study Buddy")
+st.sidebar.info("This app helps you learn concepts, summarize texts, generate questions, and explore examples using AI.")
+st.sidebar.title("📌 Explore more ")
+st.sidebar.markdown("[🔗 Quillbot](https://quillbot.com/app/chrome-extension?utm_medium=cpc&utm_source=google&utm_campaign=FA+-+HY+|+PERF+-+Search+|+Product+-+Ext+-+Chrome+-+Brand+|+PREM+|+CPA&utm_term=quillbot&utm_content=712027389560&campaign_type=search-21658135865&click_id=Cj0KCQiA4-y8BhC3ARIsAHmjC_G4uh6X0jPTO0QWgAwGkH-jWccKnj25x-G5d2OlEHB3RqmHKmiq6fkaAiynEALw_wcB&campaign_id=21658135865&adgroup_id=169729553951&ad_id=712027389560&keyword=quillbot&placement=&target=&network=g&gad_source=1&gclid=Cj0KCQiA4-y8BhC3ARIsAHmjC_G4uh6X0jPTO0QWgAwGkH-jWccKnj25x-G5d2OlEHB3RqmHKmiq6fkaAiynEALw_wcB)", unsafe_allow_html=True)
+st.sidebar.markdown("[🔗 Stayfocusd](https://www.stayfocusd.com/)", unsafe_allow_html=True)
